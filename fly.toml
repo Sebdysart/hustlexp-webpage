@@ -1,22 +1,51 @@
-# fly.toml app configuration file generated for hustlexp-webpage-damp-frog-2208 on 2025-11-30T04:49:18-08:00
-#
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
-#
+# MODIFIED: keeps internal_port 8043 to match the updated nginx config.
+# The main delta vs. the original is the added /healthz check path and
+# a tightened concurrency soft_limit to avoid cold-start 502s while
+# the concierge traffic is still small.
 
 app = "hustlexp-webpage"
-primary_region = 'sjc'
+primary_region = "sjc"
 
 [build]
+  dockerfile = "Dockerfile"
+  # Pass Vite build-time vars through Fly build args. See Dockerfile.
+  # Each arg must also be set as a secret or via `fly deploy --build-arg`:
+  # fly deploy --build-arg VITE_SUPABASE_URL=https://<ref>.supabase.co \
+  #            --build-arg VITE_SUPABASE_ANON_KEY=... \
+  #            --build-arg VITE_TALLY_FORM_CUSTOMER=... \
+  #            --build-arg VITE_TALLY_FORM_HUSTLER=... \
+  #            --build-arg VITE_TALLY_FORM_WAITLIST=... \
+  #            --build-arg VITE_BACKEND_OPS_ENDPOINT=https://api.hustlexp.app
 
 [http_service]
   internal_port = 8043
   force_https = true
-  auto_stop_machines = 'stop'
+  # Matches current prod — machines auto-stop on idle and auto-start on
+  # inbound request. Cold start on the first hit of the day is
+  # acceptable for concierge-volume traffic and keeps costs flat.
+  auto_stop_machines = true
   auto_start_machines = true
   min_machines_running = 0
-  processes = ['app']
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200
+    hard_limit = 300
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout  = "5s"
+    grace_period = "10s"
+    method = "get"
+    path   = "/healthz"
 
 [[vm]]
-  memory = '1gb'
-  cpu_kind = 'shared'
+  cpu_kind = "shared"
   cpus = 1
+  # Matches current prod (verified via fly-status on 2026-04-19).
+  # Do NOT drop below 1024 — the Vite build stage in the builder
+  # image can peak above 512 MB.
+  memory_mb = 1024
+
+[env]
+  NODE_ENV = "production"
